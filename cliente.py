@@ -31,6 +31,7 @@ def start_client():
     try:
         client.connect(('localhost', 8080))
 
+        operacao_escolhida = None
         while True:
             operacao = receber(client)
             print(operacao, end="")
@@ -64,24 +65,50 @@ def start_client():
                 mensagem = input(f"\nInforme a string que você deseja enviar:\n-> ")
                 
                 print("\nIniciando envio dos pacotes...")
-                deu_erro_servidor = False
-                
-                #enviando a string em blocos de 4
-                for i in range(0, len(mensagem), 4):
-                    fatia = mensagem[i:i+4]
-                    enviar(fatia, client)
-                    
-                    confirmacao = receber(client)
-                    print(f"Pacote enviado: [{fatia}] | Resposta: {confirmacao}")
-                    
-                    #Recebe a validação do server
-                    if "ERRO" in confirmacao:
-                        print(f"\n[CLIENTE] O Servidor não aceitou: {confirmacao}")
-                        deu_erro_servidor = True
-                        break
-                
+                pacotes = [mensagem[i:i+4] for i in range(0, len(mensagem), 4)]
+
+                #Go-Back-N: envia 5 pacotes por vez
+                if operacao_escolhida == "1":
+                    WINDOW_SIZE = 5
+                    i = 0
+                    deu_erro_servidor = False
+
+                    while i < len(pacotes):
+                        janela = pacotes[i:i + WINDOW_SIZE]
+                        print(f"\n[CLIENTE]Enviando janela: pacotes {i + 1} a {i + len(janela)}...")
+
+                        for fatia in janela:
+                            enviar(fatia, client)
+                            print(f"Pacote enviado: [{fatia}]")
+
+                        confirmacao = receber(client)
+                        print(f"Resposta do servidor: {confirmacao}")
+
+                        if "ERRO" in confirmacao:
+                            print(f"\n[CLIENTE]O Servidor não aceitou: {confirmacao}")
+                            deu_erro_servidor = True
+                            break
+
+                        i += WINDOW_SIZE
+
+                #Repetição Seletiva: envia 1 pacote e aguarda
+                else:
+                    deu_erro_servidor = False
+
+                    for fatia in pacotes:
+                        while True:
+                            enviar(fatia, client)
+                            confirmacao = receber(client)
+                            print(f"Pacote enviado: [{fatia}] | Resposta: {confirmacao}")
+
+                            if "NACK" in confirmacao or "ERRO" in confirmacao:
+                                print(f"[CLIENTE]NACK recebido, reenviando pacote [{fatia}]...")
+                                continue
+
+                            break  #TUDO CERTO, CONTINUA O CODIGO!
+
                 if deu_erro_servidor:
-                    continue # Volta pro "Informe a string..."
+                    continue
                 else:
                     print("\n[CLIENTE] Envio concluído com sucesso!")
                     input("\nPressione ENTER para encerrar a conexão com o servidor...")

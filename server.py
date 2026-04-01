@@ -71,55 +71,67 @@ def start_server():
             conn.send("[SERVIDOR]Tamanho aceito! Envie a string.\n".encode())
             print("[SERVIDOR]Tamanho validado. Aguardando recebimento da string.\n")
 
-            if operacao in (1, 2):
-                nome_op = "Go-Back-N" if operacao == 1 else "Repetição Seletiva"
-                print(f"[SERVIDOR]Modo {nome_op} iniciado.\n")
+            janela_max = (tamanho_mensagem + 3) // 4
+            WINDOW_SIZE = 5
+            nome_op = "Go-Back-N" if operacao == 1 else "Repetição Seletiva"
+            print(f"[SERVIDOR]Modo {nome_op} iniciado.\n")
+            print(f"[SERVIDOR]Máximo de pacotes esperados: {janela_max}\n")
 
-                while True:
-                    string_final = ""
-                    janela = 1
-                    janela_max = (tamanho_mensagem + 3) // 4
-                    estourou_limite = False
+            string_final = ""
+            janela = 1
 
-                    while True:
+            #Go-Back-N: recebe até 5 pacotes por vez
+            if operacao == 1:
+                while janela <= janela_max:
+                    tamanho_janela = min(WINDOW_SIZE, janela_max - janela + 1)
+                    print(f"[SERVIDOR]Aguardando janela: pacotes {janela} a {janela + tamanho_janela - 1}...")
+
+                    pacotes_janela = []
+                    fim_antecipado = False
+
+                    for _ in range(tamanho_janela):
+                        conn.settimeout(2.0)
+                        try:
                             pacote = conn.recv(4).decode()
-                            
-                            if not pacote: break
-
-                            # valida se a quantidade de pacotes foi ultrapassada
-                            if janela > janela_max:
-                                # DISPARA O ERRO PARA O CLIENTE
-                                enviar("[SERVIDOR]ERRO: Limite excedido! Reenvie a string.", conn)
-                                print(f"\n[SERVIDOR]ERRO: Cliente tentou enviar pacote {janela}, ultrapassando o limite de {janela_max} pacotes!")
-                                estourou_limite = True
-                                
-                                try:
-                                    while conn.recv(1024): pass
-                                except socket.timeout:
-                                    pass
-                                conn.settimeout(None)
+                            if not pacote:
+                                fim_antecipado = True
                                 break
-
-                            # Confirmação normal
-                            confirmacao = f"[SERVIDOR]ACK {janela}" if operacao == 1 else "certo"
-                            enviar(confirmacao, conn)
+                            pacotes_janela.append(pacote)
+                            print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
                             string_final += pacote
-                            
-                            if operacao == 1:
-                                print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
-                            else:
-                                print(f"[SERVIDOR]Recebido pacote: [{pacote}]")
-                                
                             janela += 1
+                        except:
+                            fim_antecipado = True
+                            break
+                        finally:
+                            conn.settimeout(None)
 
-                    if estourou_limite:
-                        print("[SERVIDOR] Exigindo reenvio. Aguardando nova string...\n")
-                        continue 
+                    if pacotes_janela:
+                        confirmacao = f"[SERVIDOR]ACK {janela - 1}"
+                        enviar(confirmacao, conn)
+                        print(f"[SERVIDOR]ACK cumulativo enviado: {confirmacao}\n")
 
-                    if not estourou_limite and string_final != "":
-                        print("\n[SERVIDOR]Sucesso! String completa recebida:")
-                        print(string_final)
+                    if fim_antecipado:
                         break
+
+            #Repetição Seletiva: recebe 1 pacote e valida
+            elif operacao == 2:
+                while janela <= janela_max:
+                    pacote = conn.recv(4).decode()
+
+                    if not pacote:
+                        break
+
+                    print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
+
+                    confirmacao = f"[SERVIDOR]ACK {janela} OK"
+                    enviar(confirmacao, conn)
+                    print(f"[SERVIDOR]Validação enviada: {confirmacao}\n")
+                    string_final += pacote
+                    janela += 1
+
+            print("\n[SERVIDOR]Sucesso! String completa recebida:")
+            print(string_final)
 
     except Exception as e:
         print(f"\n[SERVIDOR] Erro ou conexão encerrada: {e}")
