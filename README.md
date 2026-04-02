@@ -18,7 +18,7 @@ No início da conexão, cliente e servidor realizam uma troca de informações c
 
 ## Tecnologias Utilizadas ⚙️
 
-* Python (Versão 2026.4.0);
+* Python (Versão 3.14.3);
 * Biblioteca Socket nativa do Python.
 
 ## Estrutura 📄
