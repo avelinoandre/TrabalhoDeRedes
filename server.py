@@ -72,7 +72,7 @@ def start_server():
             print("[SERVIDOR]Tamanho validado. Aguardando recebimento da string.\n")
 
             janela_max = (tamanho_mensagem + 3) // 4
-            WINDOW_SIZE = 5
+            tamanho_janela_inicial = 5
             nome_op = "Go-Back-N" if operacao == 1 else "Repetição Seletiva"
             print(f"[SERVIDOR]Modo {nome_op} iniciado.\n")
             print(f"[SERVIDOR]Máximo de pacotes esperados: {janela_max}\n")
@@ -83,28 +83,23 @@ def start_server():
             #Go-Back-N: recebe até 5 pacotes por vez
             if operacao == 1:
                 while janela <= janela_max:
-                    tamanho_janela = min(WINDOW_SIZE, janela_max - janela + 1)
+                    tamanho_janela = min(tamanho_janela_inicial, janela_max - janela + 1)
                     print(f"[SERVIDOR]Aguardando janela: pacotes {janela} a {janela + tamanho_janela - 1}...")
 
                     pacotes_janela = []
                     fim_antecipado = False
 
                     for _ in range(tamanho_janela):
-                        conn.settimeout(2.0)
-                        try:
-                            pacote = conn.recv(4).decode()
-                            if not pacote:
-                                fim_antecipado = True
-                                break
-                            pacotes_janela.append(pacote)
-                            print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
-                            string_final += pacote
-                            janela += 1
-                        except:
+                        pacote = conn.recv(4).decode()
+
+                        if not pacote or pacote == "####":
                             fim_antecipado = True
                             break
-                        finally:
-                            conn.settimeout(None)
+
+                        pacotes_janela.append(pacote)
+                        print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
+                        string_final += pacote
+                        janela += 1
 
                     if pacotes_janela:
                         confirmacao = f"[SERVIDOR]ACK {janela - 1}"
@@ -114,12 +109,12 @@ def start_server():
                     if fim_antecipado:
                         break
 
-            #Repetição Seletiva: recebe 1 pacote e valida
+            #Repetição Seletiva: recebe 1 pacote e o valida
             elif operacao == 2:
                 while janela <= janela_max:
                     pacote = conn.recv(4).decode()
 
-                    if not pacote:
+                    if not pacote or pacote == "####":
                         break
 
                     print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")

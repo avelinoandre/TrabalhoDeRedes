@@ -69,17 +69,20 @@ def start_client():
 
                 #Go-Back-N: envia 5 pacotes por vez
                 if operacao_escolhida == "1":
-                    WINDOW_SIZE = 5
+                    tamanho_janela = 5
                     i = 0
                     deu_erro_servidor = False
 
                     while i < len(pacotes):
-                        janela = pacotes[i:i + WINDOW_SIZE]
+                        janela = pacotes[i:i + tamanho_janela]
                         print(f"\n[CLIENTE]Enviando janela: pacotes {i + 1} a {i + len(janela)}...")
 
                         for fatia in janela:
                             enviar(fatia, client)
                             print(f"Pacote enviado: [{fatia}]")
+
+                        if i + tamanho_janela >= len(pacotes):
+                            enviar("####", client)
 
                         confirmacao = receber(client)
                         print(f"Resposta do servidor: {confirmacao}")
@@ -89,7 +92,7 @@ def start_client():
                             deu_erro_servidor = True
                             break
 
-                        i += WINDOW_SIZE
+                        i += tamanho_janela
 
                 #Repetição Seletiva: envia 1 pacote e aguarda
                 else:
@@ -105,7 +108,7 @@ def start_client():
                                 print(f"[CLIENTE]NACK recebido, reenviando pacote [{fatia}]...")
                                 continue
 
-                            break  #TUDO CERTO, CONTINUA O CODIGO!
+                            break  # ACK ok, próximo pacote
 
                 if deu_erro_servidor:
                     continue
