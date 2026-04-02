@@ -53,6 +53,7 @@ Em outro terminal, use o comando `python cliente.py` e utilize o sistema conform
 O **cliente** inicia a conexão com o **servidor**, seguido pela realização de um **handshake**, no qual são definidos o modo de operação e o tamanho máximo das mensagens. Em seguida, ocorre a **troca de dados** entre cliente e servidor, e, ao final, a conexão é devidamente encerrada.
 
 ## Uso de Inteligência Artificial 🧠
+A IA foi usada para ajudar na formatação de códigos e organização e também para ajudar em formas de efetuar o "stop" do envio de pacotes.
 
 ## Considerações 📄
 Este projeto permitiu consolidar, na prática, conceitos fundamentais de redes de computadores por meio da implementação de uma comunicação cliente-servidor. A aplicação do handshake e o controle da troca de dados mostram a importância da padronização e sincronização entre sistemas. Além disso, o desenvolvimento contribuiu para uma melhor compreensão do funcionamento de conexões em rede e da organização de aplicações distribuídas
