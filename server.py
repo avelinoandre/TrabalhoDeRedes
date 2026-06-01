@@ -1,7 +1,10 @@
-import socket, os
+import socket, os, hashlib
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
+
+#Chave de criptografia simetrica XOR (deve ser identica no cliente)
+CHAVE = b"REDES2026"
 
 def enviar(mensagem,conn):
     conn.send(mensagem.encode())
@@ -26,6 +29,27 @@ def cabecalho():
 def print_asc():
     limpar_tela()
     cabecalho()
+
+#Decriptografa payload recebido via XOR com a chave compartilhada
+def decriptar(hex_str):
+    cifrado = bytes.fromhex(hex_str)
+    return bytes(b ^ CHAVE[i % len(CHAVE)] for i, b in enumerate(cifrado)).decode()
+
+#Calcula checksum SHA-256 (primeiros 8 caracteres) do payload
+def calcular_checksum(dados):
+    return hashlib.sha256(dados.encode()).hexdigest()[:8]
+
+#Verifica se o checksum recebido bate com o payload decriptado
+def verificar_checksum(dados, checksum_recebido):
+    return calcular_checksum(dados) == checksum_recebido
+
+#Faz o parse de um pacote no formato: SEQ:<n>|DATA:<hex>|CHK:<checksum>
+def parsear_pacote(raw):
+    partes = dict(p.split(":", 1) for p in raw.split("|"))
+    seq = int(partes["SEQ"])
+    payload = decriptar(partes["DATA"])
+    checksum = partes["CHK"]
+    return seq, payload, checksum
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -90,7 +114,7 @@ def start_server():
             string_final = ""
             janela = 1
 
-            #Go-Back-N: recebe até 5 pacotes por vez
+            #Go-Back-N: recebe até N pacotes por vez e valida janela completa antes de confirmar
             if operacao == 1:
                 while janela <= janela_max:
                     tamanho_janela = min(tamanho_janela_inicial, janela_max - janela + 1)
@@ -98,20 +122,50 @@ def start_server():
 
                     pacotes_janela = []
                     fim_antecipado = False
+                    janela_base = janela
+                    erro_detectado = False
 
                     for _ in range(tamanho_janela):
-                        pacote = conn.recv(4).decode()
+                        #Aguarda pacote com timeout para detectar perdas
+                        conn.settimeout(5)
+                        try:
+                            raw = conn.recv(1024).decode()
+                        except socket.timeout:
+                            print(f"[SERVIDOR]Timeout! Pacote {janela} não chegou. Enviando NACK...")
+                            enviar(f"[SERVIDOR]NACK {janela_base}", conn)
+                            erro_detectado = True
+                            break
+                        finally:
+                            conn.settimeout(None)
 
-                        if not pacote or pacote == "####":
+                        if not raw or raw == "####":
                             fim_antecipado = True
                             break
 
-                        pacotes_janela.append(pacote)
-                        print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
-                        string_final += pacote
+                        #Faz parse e valida checksum de cada pacote recebido
+                        try:
+                            seq, payload, checksum = parsear_pacote(raw)
+                        except Exception:
+                            print(f"[SERVIDOR]Pacote malformado recebido. Enviando NACK...")
+                            enviar(f"[SERVIDOR]NACK {janela_base}", conn)
+                            erro_detectado = True
+                            break
+
+                        print(f"[SERVIDOR]Recebido pacote {seq}: [{payload}] | CHK:{checksum}")
+
+                        if not verificar_checksum(payload, checksum):
+                            print(f"[SERVIDOR]Erro de integridade no pacote {seq}! Enviando NACK da janela...")
+                            enviar(f"[SERVIDOR]NACK {janela_base}", conn)
+                            erro_detectado = True
+                            break
+
+                        pacotes_janela.append(payload)
                         janela += 1
 
-                    if pacotes_janela:
+                    #Se não houve erro, confirma a janela com ACK cumulativo
+                    if not erro_detectado and pacotes_janela:
+                        for p in pacotes_janela:
+                            string_final += p
                         confirmacao = f"[SERVIDOR]ACK {janela - 1}"
                         enviar(confirmacao, conn)
                         print(f"[SERVIDOR]ACK cumulativo enviado: {confirmacao}\n")
@@ -119,20 +173,46 @@ def start_server():
                     if fim_antecipado:
                         break
 
-            #Repetição Seletiva: recebe 1 pacote e o valida
+                    #Em Go-Back-N, volta ao inicio da janela se houve erro
+                    if erro_detectado:
+                        janela = janela_base
+
+            #Repetição Seletiva: valida e confirma cada pacote individualmente
             elif operacao == 2:
                 while janela <= janela_max:
-                    pacote = conn.recv(4).decode()
+                    #Aguarda cada pacote com timeout para detectar perdas
+                    conn.settimeout(5)
+                    try:
+                        raw = conn.recv(1024).decode()
+                    except socket.timeout:
+                        print(f"[SERVIDOR]Timeout! Pacote {janela} não chegou. Enviando NACK...")
+                        enviar(f"[SERVIDOR]NACK {janela}", conn)
+                        continue
+                    finally:
+                        conn.settimeout(None)
 
-                    if not pacote or pacote == "####":
+                    if not raw or raw == "####":
                         break
 
-                    print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
+                    #Faz parse e valida checksum do pacote individual
+                    try:
+                        seq, payload, checksum = parsear_pacote(raw)
+                    except Exception:
+                        print(f"[SERVIDOR]Pacote malformado recebido. Enviando NACK...")
+                        enviar(f"[SERVIDOR]NACK {janela}", conn)
+                        continue
 
-                    confirmacao = f"[SERVIDOR]ACK {janela} OK"
+                    print(f"[SERVIDOR]Recebido pacote {seq}: [{payload}] | CHK:{checksum}")
+
+                    if not verificar_checksum(payload, checksum):
+                        print(f"[SERVIDOR]Erro de integridade no pacote {seq}! Enviando NACK...")
+                        enviar(f"[SERVIDOR]NACK {seq}", conn)
+                        continue
+
+                    confirmacao = f"[SERVIDOR]ACK {seq} OK"
                     enviar(confirmacao, conn)
                     print(f"[SERVIDOR]Validação enviada: {confirmacao}\n")
-                    string_final += pacote
+                    string_final += payload
                     janela += 1
 
             print("\n[SERVIDOR]Sucesso! String completa recebida:")
