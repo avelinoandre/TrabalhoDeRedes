@@ -1,129 +1,148 @@
 import socket, os
 
-BLUE = "\033[34m"
+YELLOW = "\033[33m"
 RESET = "\033[0m"
 
-def receber(client):
-    return client.recv(1024).decode()
+def enviar(mensagem,conn):
+    conn.send(mensagem.encode())
 
-def enviar(mensagem, client):
-    client.send(mensagem.encode())
+def receber(conn):
+    return conn.recv(1024).decode()
 
-def limparTerminal():
+def limpar_tela():
     os.system("cls" if os.name == "nt" else "clear")
 
 def cabecalho():
-    cliente = r"""
- ██████╗██╗     ██╗███████╗███╗   ██╗████████╗███████╗
-██╔════╝██║     ██║██╔════╝████╗  ██║╚══██╔══╝██╔════╝
-██║     ██║     ██║█████╗  ██╔██╗ ██║   ██║   █████╗  
-██║     ██║     ██║██╔══╝  ██║╚██╗██║   ██║   ██╔══╝  
-╚██████╗███████╗██║███████╗██║ ╚████║   ██║   ███████╗
- ╚═════╝╚══════╝╚═╝╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚══════╝
+    servidor = r"""
+███████╗███████╗██████╗ ██╗   ██╗██╗██████╗  ██████╗ ██████╗ 
+██╔════╝██╔════╝██╔══██╗██║   ██║██║██╔══██╗██╔═══██╗██╔══██╗
+███████╗█████╗  ██████╔╝██║   ██║██║██║  ██║██║   ██║██████╔╝
+╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██║██║  ██║██║   ██║██╔══██╗
+███████║███████╗██║  ██║ ╚████╔╝ ██║██████╔╝╚██████╔╝██║  ██║
+╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
 """
-    print(BLUE + cliente + RESET)
+    print(YELLOW + servidor + RESET)
 
-def start_client():
-    limparTerminal()
+def print_asc():
+    limpar_tela()
     cabecalho()
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
+
+def start_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(('localhost', 8080))
+    server.listen(1)
+    print_asc()
+
+    conn, addr = server.accept()
     try:
-        client.connect(('localhost', 8080))
-
-        operacao_escolhida = None
         while True:
-            operacao = receber(client)
-            print(operacao, end="")
-
-            operacao_escolhida = input("-> ")
-            enviar(operacao_escolhida, client)
-
-            validacao = receber(client)
-            if validacao == "True":
+            modo_operacao = "[SERVIDOR]Escolha o método da operação\n[1]Go-backn\n[2]Repetição Seletiva\n"
+            enviar(modo_operacao,conn)
+            operacao_escolhida = receber(conn)
+            if operacao_escolhida == "1":
+                operacao = 1
+                enviar("True",conn)
+                print_asc()
+                print("[CLIENTE]Operação escolhida foi [1]Go-backn\n")
+                break
+            elif operacao_escolhida == "2":
+                operacao = 2
+                enviar("True",conn)
+                print_asc()
+                print("[CLIENTE]Operação escolhida foi [2]Repetição Seletiva\n")
                 break
             else:
-                print(validacao, end="")
+                enviar("[SERVIDOR]Erro! Opção inválida! Repetindo operação...\n",conn)
+                print_asc()
+                print("[SERVIDOR]Erro! Opção inválida! Aguardando nova resposta...")
                 continue
+        
+        enviar("[SERVIDOR]Qual o tamanho máximo de string que você deseja enviar? (Mínimo é 30.)\n",conn)
+        tamanho_mensagem = int(receber(conn))
+        
+        print(f"[SERVIDOR]Cliente quer enviar uma string de tamanho {tamanho_mensagem}.\n")
 
-        tamanho_str = receber(client)
-        print(tamanho_str, end="")
+        while True:
+            try:
+                tamanho_janela_inicial = int(input("[SERVIDOR]Escolha o tamanho da janela (1 a 5): "))
+                if 1 <= tamanho_janela_inicial <= 5:
+                    break
+                print("[SERVIDOR]Valor inválido! Digite um número entre 1 e 5.")
+            except ValueError:
+                print("[SERVIDOR]Entrada inválida! Digite um número inteiro.")
 
-        tamanho_mensagem = input("-> ")
-        print(f"Informando tamanho ({tamanho_mensagem}) ao servidor...")
-        enviar(tamanho_mensagem, client)
+        enviar(f"[SERVIDOR]Janela atual: {tamanho_janela_inicial} pacotes.\n", conn)
+        enviar(str(tamanho_janela_inicial), conn)
 
-        aviso_janela = receber(client)
-        print(aviso_janela, end="")
+        if tamanho_mensagem < 30:
+            enviar(f"[SERVIDOR]NEGADO: Tamanho {tamanho_mensagem} é menor que o mínimo de 30.", conn)
+            print("[SERVIDOR]Conexão recusada por tamanho insuficiente.")
+        else:
+            conn.send("[SERVIDOR]Tamanho aceito! Envie a string.\n".encode())
+            print("[SERVIDOR]Tamanho validado. Aguardando recebimento da string.\n")
 
-        tamanho_janela = int(receber(client))
+            janela_max = (tamanho_mensagem + 3) // 4
+            nome_op = "Go-Back-N" if operacao == 1 else "Repetição Seletiva"
+            print(f"[SERVIDOR]Modo {nome_op} iniciado.\n")
+            print(f"[SERVIDOR]Máximo de pacotes esperados: {janela_max}\n")
 
-        resposta = receber(client)
-        print(resposta, end="")
+            string_final = ""
+            janela = 1
 
-        if "Tamanho aceito" in resposta:
-            
-            while True:
-                mensagem = input(f"\nInforme a string que você deseja enviar:\n-> ")
-                
-                print("\nIniciando envio dos pacotes...")
-                pacotes = [mensagem[i:i+4] for i in range(0, len(mensagem), 4)]
+            #Go-Back-N: recebe até 5 pacotes por vez
+            if operacao == 1:
+                while janela <= janela_max:
+                    tamanho_janela = min(tamanho_janela_inicial, janela_max - janela + 1)
+                    print(f"[SERVIDOR]Aguardando janela: pacotes {janela} a {janela + tamanho_janela - 1}...")
 
-                #Go-Back-N: envia N pacotes por vez (tamanho definido pelo servidor)
-                if operacao_escolhida == "1":
-                    i = 0
-                    deu_erro_servidor = False
+                    pacotes_janela = []
+                    fim_antecipado = False
 
-                    while i < len(pacotes):
-                        janela = pacotes[i:i + tamanho_janela]
-                        print(f"\n[CLIENTE]Enviando janela: pacotes {i + 1} a {i + len(janela)}...")
+                    for _ in range(tamanho_janela):
+                        pacote = conn.recv(4).decode()
 
-                        for fatia in janela:
-                            enviar(fatia, client)
-                            print(f"Pacote enviado: [{fatia}]")
-
-                        if i + tamanho_janela >= len(pacotes):
-                            enviar("####", client)
-
-                        confirmacao = receber(client)
-                        print(f"Resposta do servidor: {confirmacao}")
-
-                        if "ERRO" in confirmacao:
-                            print(f"\n[CLIENTE]O Servidor não aceitou: {confirmacao}")
-                            deu_erro_servidor = True
+                        if not pacote or pacote == "####":
+                            fim_antecipado = True
                             break
 
-                        i += tamanho_janela
+                        pacotes_janela.append(pacote)
+                        print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
+                        string_final += pacote
+                        janela += 1
 
-                #Repetição Seletiva: envia 1 pacote e aguarda
-                else:
-                    deu_erro_servidor = False
+                    if pacotes_janela:
+                        confirmacao = f"[SERVIDOR]ACK {janela - 1}"
+                        enviar(confirmacao, conn)
+                        print(f"[SERVIDOR]ACK cumulativo enviado: {confirmacao}\n")
 
-                    for fatia in pacotes:
-                        while True:
-                            enviar(fatia, client)
-                            confirmacao = receber(client)
-                            print(f"Pacote enviado: [{fatia}] | Resposta: {confirmacao}")
+                    if fim_antecipado:
+                        break
 
-                            if "NACK" in confirmacao or "ERRO" in confirmacao:
-                                print(f"[CLIENTE]NACK recebido, reenviando pacote [{fatia}]...")
-                                continue
+            #Repetição Seletiva: recebe 1 pacote e o valida
+            elif operacao == 2:
+                while janela <= janela_max:
+                    pacote = conn.recv(4).decode()
 
-                            break  # ACK ok, próximo pacote
+                    if not pacote or pacote == "####":
+                        break
 
-                if deu_erro_servidor:
-                    continue
-                else:
-                    print("\n[CLIENTE] Envio concluído com sucesso!")
-                    input("\nPressione ENTER para encerrar a conexão com o servidor...")
-                    break
-        else:
-            print("[CLIENTE] Conexão encerrada pelo servidor (tamanho recusado).")
+                    print(f"[SERVIDOR]Recebido pacote {janela}: [{pacote}]")
+
+                    confirmacao = f"[SERVIDOR]ACK {janela} OK"
+                    enviar(confirmacao, conn)
+                    print(f"[SERVIDOR]Validação enviada: {confirmacao}\n")
+                    string_final += pacote
+                    janela += 1
+
+            print("\n[SERVIDOR]Sucesso! String completa recebida:")
+            print(string_final)
 
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"\n[SERVIDOR] Erro ou conexão encerrada: {e}")
     finally:
-        client.close()
+        conn.close()
+        server.close()
 
 if __name__ == "__main__":
-    start_client()
+    start_server()
