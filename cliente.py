@@ -1,10 +1,12 @@
 import socket, os, hashlib
+from cryptography.fernet import Fernet
 
 BLUE = "\033[34m"
 RESET = "\033[0m"
 
-#Chave de criptografia simetrica XOR (deve ser identica no servidor)
-CHAVE = b"REDES2026"
+#Chave Fernet compartilhada (deve ser identica no servidor)
+#Para gerar uma nova chave: Fernet.generate_key() e colar aqui e no servidor
+FERNET = Fernet(b"fBlZBUrtT3vLmy2NRmCKEGKdu_7_PfNIi8e-4UdkgMA=")
 
 def receber(client):
     return client.recv(1024).decode()
@@ -26,9 +28,9 @@ def cabecalho():
 """
     print(BLUE + cliente + RESET)
 
-#Encripta payload via XOR com a chave compartilhada e retorna em hexadecimal
+#Encripta payload via Fernet com a chave compartilhada e retorna em hexadecimal
 def encriptar(texto):
-    return bytes(b ^ CHAVE[i % len(CHAVE)] for i, b in enumerate(texto.encode())).hex()
+    return FERNET.encrypt(texto.encode()).hex()
 
 #Calcula checksum SHA-256 (primeiros 8 caracteres) do payload
 def calcular_checksum(dados):
@@ -75,11 +77,25 @@ def configurar_erros(total_pacotes):
     print(f"[CLIENTE]Pacotes a perder: {sorted(perdidos) if perdidos else 'nenhum'}\n")
     return corrompidos, perdidos
 
+#Imprime o resumo da sessão ao final do envio
+def imprimir_resumo(stats):
+    print("\n" + "="*55)
+    print("[CLIENTE] RESUMO DA SESSÃO")
+    print("="*55)
+    print(f"  Mensagem enviada              : {stats['tamanho_mensagem']} caracteres")
+    print(f"  Total de pacotes              : {stats['total_pacotes']}")
+    print(f"  Pacotes confirmados (ACK)     : {stats['acks_recebidos']}")
+    print(f"  Retransmissões por NACK       : {stats['retransmissoes_nack']}")
+    print(f"  Retransmissões por timeout    : {stats['retransmissoes_timeout']}")
+    print(f"  Pacotes corrompidos simulados : {stats['corrompidos_simulados']}")
+    print(f"  Pacotes perdidos simulados    : {stats['perdidos_simulados']}")
+    print("="*55 + "\n")
+
 def start_client():
     limparTerminal()
     cabecalho()
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    
+
     try:
         client.connect(('localhost', 8080))
 
@@ -101,7 +117,18 @@ def start_client():
         tamanho_str = receber(client)
         print(tamanho_str, end="")
 
-        tamanho_mensagem = input("-> ")
+        #Valida se o tamanho informado pelo usuario atende o minimo exigido
+        while True:
+            tamanho_mensagem_raw = input("-> ").strip()
+            try:
+                tamanho_mensagem_int = int(tamanho_mensagem_raw)
+                if tamanho_mensagem_int >= 30:
+                    break
+                print("[CLIENTE]Valor inválido! O tamanho mínimo é 30 caracteres. Tente novamente.")
+            except ValueError:
+                print("[CLIENTE]Entrada inválida! Digite um número inteiro.")
+
+        tamanho_mensagem = tamanho_mensagem_raw
         print(f"Informando tamanho ({tamanho_mensagem}) ao servidor...")
         enviar(tamanho_mensagem, client)
 
@@ -114,14 +141,30 @@ def start_client():
         print(resposta, end="")
 
         if "Tamanho aceito" in resposta:
-            
+
             while True:
-                mensagem = input(f"\nInforme a string que você deseja enviar:\n-> ")
-                
+                #Valida se a mensagem digitada cabe no limite combinado com o servidor
+                while True:
+                    mensagem = input(f"\nInforme a string que você deseja enviar (máx. {tamanho_mensagem_int} caracteres):\n-> ")
+                    if len(mensagem) <= tamanho_mensagem_int:
+                        break
+                    print(f"[CLIENTE]Mensagem muito longa! Você digitou {len(mensagem)} caracteres, mas o limite é {tamanho_mensagem_int}. Tente novamente.")
+
                 print("\nIniciando envio dos pacotes...")
                 pacotes = [mensagem[i:i+4] for i in range(0, len(mensagem), 4)]
 
                 corrompidos, perdidos = configurar_erros(len(pacotes))
+
+                #Estatísticas da sessão para o resumo final
+                stats = {
+                    "tamanho_mensagem": len(mensagem),
+                    "total_pacotes": len(pacotes),
+                    "acks_recebidos": 0,
+                    "retransmissoes_nack": 0,
+                    "retransmissoes_timeout": 0,
+                    "corrompidos_simulados": len(corrompidos),
+                    "perdidos_simulados": len(perdidos),
+                }
 
                 #Go-Back-N: envia N pacotes por vez, retransmite a janela inteira em caso de NACK ou timeout
                 if operacao_escolhida == "1":
@@ -160,6 +203,7 @@ def start_client():
                             confirmacao = receber(client)
                         except socket.timeout:
                             print(f"\n[CLIENTE]Timeout! Sem resposta do servidor. Reenviando janela a partir do SEQ:{seq_base}...")
+                            stats["retransmissoes_timeout"] += 1
                             continue
                         finally:
                             client.settimeout(None)
@@ -169,6 +213,7 @@ def start_client():
                         if "NACK" in confirmacao:
                             #Em Go-Back-N, retransmite a janela inteira a partir do pacote indicado
                             print(f"\n[CLIENTE]NACK recebido. Reenviando janela a partir do SEQ:{seq_base}...")
+                            stats["retransmissoes_nack"] += 1
                             corrompidos.discard(seq_base)
                             perdidos.discard(seq_base)
                         elif "ERRO" in confirmacao:
@@ -176,6 +221,7 @@ def start_client():
                             deu_erro_servidor = True
                             break
                         else:
+                            stats["acks_recebidos"] += 1
                             i += tamanho_janela
 
                 #Repetição Seletiva: reenvia apenas o pacote rejeitado (NACK) ou perdido (timeout)
@@ -206,6 +252,7 @@ def start_client():
                                 confirmacao = receber(client)
                             except socket.timeout:
                                 print(f"[CLIENTE]Timeout! Sem resposta para SEQ:{seq}. Reenviando...")
+                                stats["retransmissoes_timeout"] += 1
                                 corrompidos.discard(seq)
                                 perdidos.discard(seq)
                                 perdido = False
@@ -219,19 +266,25 @@ def start_client():
                             if "NACK" in confirmacao or "ERRO" in confirmacao:
                                 #Em Repetição Seletiva, retransmite apenas o pacote rejeitado
                                 print(f"[CLIENTE]NACK recebido, reenviando pacote SEQ:{seq} [{fatia}]...")
+                                stats["retransmissoes_nack"] += 1
                                 corrompidos.discard(seq)
                                 perdidos.discard(seq)
                                 perdido = False
                                 corrompido = False
                                 continue
 
+                            stats["acks_recebidos"] += 1
                             break
 
                 if deu_erro_servidor:
                     continue
                 else:
                     print("\n[CLIENTE] Envio concluído com sucesso!")
-                    input("\nPressione ENTER para encerrar a conexão com o servidor...")
+
+                    #Exibe o resumo da sessão ao finalizar o envio
+                    imprimir_resumo(stats)
+
+                    input("Pressione ENTER para encerrar a conexão com o servidor...")
                     break
         else:
             print("[CLIENTE] Conexão encerrada pelo servidor (tamanho recusado).")

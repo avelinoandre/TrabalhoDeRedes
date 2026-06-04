@@ -1,12 +1,15 @@
-import socket, os, hashlib
+import socket, os, hashlib, threading
+from cryptography.fernet import Fernet
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
 
-#Chave de criptografia simetrica XOR (deve ser identica no cliente)
-CHAVE = b"REDES2026"
+#Chave Fernet compartilhada (deve ser identica no cliente)
+#Para gerar uma nova chave: Fernet.generate_key() e substituir abaixo
+CHAVE = b"REDES2026_padded_to_32bytes_aaaaa="  #Placeholder — use a mesma chave gerada no cliente
+FERNET = Fernet(b"fBlZBUrtT3vLmy2NRmCKEGKdu_7_PfNIi8e-4UdkgMA=")
 
-def enviar(mensagem,conn):
+def enviar(mensagem, conn):
     conn.send(mensagem.encode())
 
 def receber(conn):
@@ -30,10 +33,10 @@ def print_asc():
     limpar_tela()
     cabecalho()
 
-#Decriptografa payload recebido via XOR com a chave compartilhada
-def decriptar(hex_str):
-    cifrado = bytes.fromhex(hex_str)
-    return bytes(b ^ CHAVE[i % len(CHAVE)] for i, b in enumerate(cifrado)).decode()
+#Decriptografa payload recebido via Fernet com a chave compartilhada
+def decriptar(token_hex):
+    token = bytes.fromhex(token_hex)
+    return FERNET.decrypt(token).decode()
 
 #Calcula checksum SHA-256 (primeiros 8 caracteres) do payload
 def calcular_checksum(dados):
@@ -51,45 +54,61 @@ def parsear_pacote(raw):
     checksum = partes["CHK"]
     return seq, payload, checksum
 
-def start_server():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('localhost', 8080))
-    server.listen(1)
-    print_asc()
+#Imprime o resumo da sessão ao final do atendimento
+def imprimir_resumo(stats):
+    print("\n" + "="*55)
+    print("[SERVIDOR] RESUMO DA SESSÃO")
+    print("="*55)
+    print(f"  Pacotes recebidos com sucesso : {stats['pacotes_ok']}")
+    print(f"  Erros de integridade (NACK)   : {stats['erros_integridade']}")
+    print(f"  Timeouts detectados           : {stats['timeouts']}")
+    print(f"  ACKs enviados                 : {stats['acks_enviados']}")
+    print(f"  NACKs enviados                : {stats['nacks_enviados']}")
+    print(f"  Mensagem reconstruída         : {stats['tamanho_final']} caracteres")
+    print("="*55 + "\n")
 
-    conn, addr = server.accept()
+#Lida com a conexão de um cliente em uma thread separada
+def handle_client(conn, addr):
+    print(f"\n[SERVIDOR] Nova conexão de {addr}")
+    
+    #Estatísticas da sessão para o resumo final
+    stats = {
+        "pacotes_ok": 0,
+        "erros_integridade": 0,
+        "timeouts": 0,
+        "acks_enviados": 0,
+        "nacks_enviados": 0,
+        "tamanho_final": 0,
+    }
+
     try:
         while True:
             modo_operacao = "[SERVIDOR]Escolha o método da operação\n[1]Go-backn\n[2]Repetição Seletiva\n"
-            enviar(modo_operacao,conn)
+            enviar(modo_operacao, conn)
             operacao_escolhida = receber(conn)
             if operacao_escolhida == "1":
                 operacao = 1
-                enviar("True",conn)
-                print_asc()
-                print("[CLIENTE]Operação escolhida foi [1]Go-backn\n")
+                enviar("True", conn)
+                print(f"[{addr}][CLIENTE]Operação escolhida foi [1]Go-backn\n")
                 break
             elif operacao_escolhida == "2":
                 operacao = 2
-                enviar("True",conn)
-                print_asc()
-                print("[CLIENTE]Operação escolhida foi [2]Repetição Seletiva\n")
+                enviar("True", conn)
+                print(f"[{addr}][CLIENTE]Operação escolhida foi [2]Repetição Seletiva\n")
                 break
             else:
-                enviar("[SERVIDOR]Erro! Opção inválida! Repetindo operação...\n",conn)
-                print_asc()
-                print("[SERVIDOR]Erro! Opção inválida! Aguardando nova resposta...")
+                enviar("[SERVIDOR]Erro! Opção inválida! Repetindo operação...\n", conn)
+                print(f"[{addr}][SERVIDOR]Opção inválida. Aguardando nova resposta...")
                 continue
-        
-        enviar("[SERVIDOR]Qual o tamanho máximo de string que você deseja enviar? (Mínimo é 30.)\n",conn)
+
+        enviar("[SERVIDOR]Qual o tamanho máximo de string que você deseja enviar? (Mínimo é 30.)\n", conn)
         tamanho_mensagem = int(receber(conn))
-        
-        print(f"[SERVIDOR]Cliente quer enviar uma string de tamanho {tamanho_mensagem}.\n")
+
+        print(f"[{addr}][SERVIDOR]Cliente quer enviar uma string de tamanho {tamanho_mensagem}.\n")
 
         while True:
             try:
-                tamanho_janela_inicial = int(input("[SERVIDOR]Escolha o tamanho da janela (1 a 5): "))
+                tamanho_janela_inicial = int(input(f"[SERVIDOR][{addr}]Escolha o tamanho da janela (1 a 5): "))
                 if 1 <= tamanho_janela_inicial <= 5:
                     break
                 print("[SERVIDOR]Valor inválido! Digite um número entre 1 e 5.")
@@ -101,15 +120,15 @@ def start_server():
 
         if tamanho_mensagem < 30:
             enviar(f"[SERVIDOR]NEGADO: Tamanho {tamanho_mensagem} é menor que o mínimo de 30.", conn)
-            print("[SERVIDOR]Conexão recusada por tamanho insuficiente.")
+            print(f"[{addr}][SERVIDOR]Conexão recusada por tamanho insuficiente.")
         else:
             conn.send("[SERVIDOR]Tamanho aceito! Envie a string.\n".encode())
-            print("[SERVIDOR]Tamanho validado. Aguardando recebimento da string.\n")
+            print(f"[{addr}][SERVIDOR]Tamanho validado. Aguardando recebimento da string.\n")
 
             janela_max = (tamanho_mensagem + 3) // 4
             nome_op = "Go-Back-N" if operacao == 1 else "Repetição Seletiva"
-            print(f"[SERVIDOR]Modo {nome_op} iniciado.\n")
-            print(f"[SERVIDOR]Máximo de pacotes esperados: {janela_max}\n")
+            print(f"[{addr}][SERVIDOR]Modo {nome_op} iniciado.\n")
+            print(f"[{addr}][SERVIDOR]Máximo de pacotes esperados: {janela_max}\n")
 
             string_final = ""
             janela = 1
@@ -118,7 +137,7 @@ def start_server():
             if operacao == 1:
                 while janela <= janela_max:
                     tamanho_janela = min(tamanho_janela_inicial, janela_max - janela + 1)
-                    print(f"[SERVIDOR]Aguardando janela: pacotes {janela} a {janela + tamanho_janela - 1}...")
+                    print(f"[{addr}][SERVIDOR]Aguardando janela: pacotes {janela} a {janela + tamanho_janela - 1}...")
 
                     pacotes_janela = []
                     fim_antecipado = False
@@ -131,8 +150,10 @@ def start_server():
                         try:
                             raw = conn.recv(1024).decode()
                         except socket.timeout:
-                            print(f"[SERVIDOR]Timeout! Pacote {janela} não chegou. Enviando NACK...")
+                            print(f"[{addr}][SERVIDOR]Timeout! Pacote {janela} não chegou. Enviando NACK...")
                             enviar(f"[SERVIDOR]NACK {janela_base}", conn)
+                            stats["timeouts"] += 1
+                            stats["nacks_enviados"] += 1
                             erro_detectado = True
                             break
                         finally:
@@ -146,20 +167,24 @@ def start_server():
                         try:
                             seq, payload, checksum = parsear_pacote(raw)
                         except Exception:
-                            print(f"[SERVIDOR]Pacote malformado recebido. Enviando NACK...")
+                            print(f"[{addr}][SERVIDOR]Pacote malformado recebido. Enviando NACK...")
                             enviar(f"[SERVIDOR]NACK {janela_base}", conn)
+                            stats["nacks_enviados"] += 1
                             erro_detectado = True
                             break
 
-                        print(f"[SERVIDOR]Recebido pacote {seq}: [{payload}] | CHK:{checksum}")
+                        print(f"[{addr}][SERVIDOR]Recebido pacote {seq}: [{payload}] | CHK:{checksum}")
 
                         if not verificar_checksum(payload, checksum):
-                            print(f"[SERVIDOR]Erro de integridade no pacote {seq}! Enviando NACK da janela...")
+                            print(f"[{addr}][SERVIDOR]Erro de integridade no pacote {seq}! Enviando NACK da janela...")
                             enviar(f"[SERVIDOR]NACK {janela_base}", conn)
+                            stats["erros_integridade"] += 1
+                            stats["nacks_enviados"] += 1
                             erro_detectado = True
                             break
 
                         pacotes_janela.append(payload)
+                        stats["pacotes_ok"] += 1
                         janela += 1
 
                     #Se não houve erro, confirma a janela com ACK cumulativo
@@ -168,7 +193,8 @@ def start_server():
                             string_final += p
                         confirmacao = f"[SERVIDOR]ACK {janela - 1}"
                         enviar(confirmacao, conn)
-                        print(f"[SERVIDOR]ACK cumulativo enviado: {confirmacao}\n")
+                        stats["acks_enviados"] += 1
+                        print(f"[{addr}][SERVIDOR]ACK cumulativo enviado: {confirmacao}\n")
 
                     if fim_antecipado:
                         break
@@ -185,8 +211,10 @@ def start_server():
                     try:
                         raw = conn.recv(1024).decode()
                     except socket.timeout:
-                        print(f"[SERVIDOR]Timeout! Pacote {janela} não chegou. Enviando NACK...")
+                        print(f"[{addr}][SERVIDOR]Timeout! Pacote {janela} não chegou. Enviando NACK...")
                         enviar(f"[SERVIDOR]NACK {janela}", conn)
+                        stats["timeouts"] += 1
+                        stats["nacks_enviados"] += 1
                         continue
                     finally:
                         conn.settimeout(None)
@@ -198,30 +226,59 @@ def start_server():
                     try:
                         seq, payload, checksum = parsear_pacote(raw)
                     except Exception:
-                        print(f"[SERVIDOR]Pacote malformado recebido. Enviando NACK...")
+                        print(f"[{addr}][SERVIDOR]Pacote malformado recebido. Enviando NACK...")
                         enviar(f"[SERVIDOR]NACK {janela}", conn)
+                        stats["nacks_enviados"] += 1
                         continue
 
-                    print(f"[SERVIDOR]Recebido pacote {seq}: [{payload}] | CHK:{checksum}")
+                    print(f"[{addr}][SERVIDOR]Recebido pacote {seq}: [{payload}] | CHK:{checksum}")
 
                     if not verificar_checksum(payload, checksum):
-                        print(f"[SERVIDOR]Erro de integridade no pacote {seq}! Enviando NACK...")
+                        print(f"[{addr}][SERVIDOR]Erro de integridade no pacote {seq}! Enviando NACK...")
                         enviar(f"[SERVIDOR]NACK {seq}", conn)
+                        stats["erros_integridade"] += 1
+                        stats["nacks_enviados"] += 1
                         continue
 
                     confirmacao = f"[SERVIDOR]ACK {seq} OK"
                     enviar(confirmacao, conn)
-                    print(f"[SERVIDOR]Validação enviada: {confirmacao}\n")
+                    stats["acks_enviados"] += 1
+                    print(f"[{addr}][SERVIDOR]Validação enviada: {confirmacao}\n")
                     string_final += payload
+                    stats["pacotes_ok"] += 1
                     janela += 1
 
-            print("\n[SERVIDOR]Sucesso! String completa recebida:")
+            stats["tamanho_final"] = len(string_final)
+
+            print(f"\n[{addr}][SERVIDOR]Sucesso! String completa recebida:")
             print(string_final)
 
+            #Exibe o resumo da sessão ao finalizar o atendimento deste cliente
+            imprimir_resumo(stats)
+
     except Exception as e:
-        print(f"\n[SERVIDOR] Erro ou conexão encerrada: {e}")
+        print(f"\n[SERVIDOR][{addr}] Erro ou conexão encerrada: {e}")
     finally:
         conn.close()
+        print(f"[SERVIDOR] Conexão com {addr} encerrada.")
+
+def start_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(('localhost', 8080))
+    server.listen(5)
+    print_asc()
+    print("[SERVIDOR] Aguardando conexões (Ctrl+C para encerrar)...\n")
+
+    #Loop principal: aceita clientes continuamente, cada um em uma thread separada
+    try:
+        while True:
+            conn, addr = server.accept()
+            t = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+            t.start()
+    except KeyboardInterrupt:
+        print("\n[SERVIDOR] Encerrado pelo usuário.")
+    finally:
         server.close()
 
 if __name__ == "__main__":
